@@ -75,4 +75,4 @@ int main()
 // Quick disclaimer, don't run this on your main system. Because the moment you run it as admin there will be no chance of stopping it besides AV.
 // I really only made this for malware samples, so feel free to add.
 // Also, dont ask if its UD its not. Js dont use it outside a vm.
-// Good luck!
+// Good luck on not bricking ur pc!
