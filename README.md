@@ -25,6 +25,7 @@ Mostly for fun and learning. I wanted to see how fast I could make a destructive
 
 This is for research and educational purposes only. If you break your computer, lose data, or otherwise mess things up, that's on you. I'm not responsible for any damage caused by running this code.
 
+I tested: https://app.any.run/tasks/528fea20-fcbc-4ff7-8d8a-50ef22e71bee
 ## License
 
 MIT License
