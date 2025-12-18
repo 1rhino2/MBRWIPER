@@ -1,6 +1,6 @@
 # DONTRUNTS
 
-This is a little project I made to mess with the MBR (Master Boot Record) on Windows. I know Windows internals pretty well, but hadn't actually wiped the MBR before, so I figured I'd give it a go. The whole point here is speed—every part of the code is tuned to run as fast as possible.
+This is a little project I made to mess with the MBR (Master Boot Record) on Windows. I know Windows internals pretty well, but hadn't actually wiped the MBR before, so I figured I'd give it a go. The whole point here is speed every part of the code is tuned to run as fast as possible.
 
 Usually I write C++, but I wanted to get better at C, so this was a good excuse. Most of my time was spent reading docs and figuring out how to do things the fastest way. If you read the code, you'll see almost every comment is about performance.
 
